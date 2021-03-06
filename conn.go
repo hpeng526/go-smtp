@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -89,7 +90,7 @@ func (c *Conn) init() {
 }
 
 // Commands are dispatched to the appropriate handler functions.
-func (c *Conn) handle(cmd string, arg string) {
+func (c *Conn) handle(ctx context.Context, cmd string, arg string) {
 	// If panic happens during command handling - send 421 response
 	// and close connection.
 	defer func() {
@@ -125,20 +126,20 @@ func (c *Conn) handle(cmd string, arg string) {
 		}
 		c.handleGreet(enhanced, arg)
 	case "MAIL":
-		c.handleMail(arg)
+		c.handleMail(ctx, arg)
 	case "RCPT":
-		c.handleRcpt(arg)
+		c.handleRcpt(ctx, arg)
 	case "VRFY":
 		c.WriteResponse(252, EnhancedCode{2, 5, 0}, "Cannot VRFY user, but will accept message")
 	case "NOOP":
 		c.WriteResponse(250, EnhancedCode{2, 0, 0}, "I have sucessfully done nothing")
 	case "RSET": // Reset session
-		c.reset()
+		c.reset(ctx)
 		c.WriteResponse(250, EnhancedCode{2, 0, 0}, "Session reset")
 	case "BDAT":
-		c.handleBdat(arg)
+		c.handleBdat(ctx, arg)
 	case "DATA":
-		c.handleData(arg)
+		c.handleData(ctx, arg)
 	case "QUIT":
 		c.WriteResponse(221, EnhancedCode{2, 0, 0}, "Bye")
 		c.Close()
@@ -146,10 +147,10 @@ func (c *Conn) handle(cmd string, arg string) {
 		if c.server.AuthDisabled {
 			c.protocolError(500, EnhancedCode{5, 5, 2}, "Syntax error, AUTH command unrecognized")
 		} else {
-			c.handleAuth(arg)
+			c.handleAuth(ctx, arg)
 		}
 	case "STARTTLS":
-		c.handleStartTLS()
+		c.handleStartTLS(ctx)
 	default:
 		msg := fmt.Sprintf("Syntax errors, %v command unrecognized", cmd)
 		c.protocolError(500, EnhancedCode{5, 5, 2}, msg)
@@ -183,7 +184,8 @@ func (c *Conn) Close() error {
 	}
 
 	if c.session != nil {
-		c.session.Logout()
+		// TODO
+		c.session.Logout(context.TODO())
 		c.session = nil
 	}
 
@@ -284,7 +286,7 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 }
 
 // READY state -> waiting for MAIL
-func (c *Conn) handleMail(arg string) {
+func (c *Conn) handleMail(ctx context.Context, arg string) {
 	if c.helo == "" {
 		c.WriteResponse(502, EnhancedCode{2, 5, 1}, "Please introduce yourself first.")
 		return
@@ -296,7 +298,7 @@ func (c *Conn) handleMail(arg string) {
 
 	if c.Session() == nil {
 		state := c.State()
-		session, err := c.server.Backend.AnonymousLogin(&state)
+		session, err := c.server.Backend.AnonymousLogin(ctx, &state)
 		if err != nil {
 			if smtpErr, ok := err.(*SMTPError); ok {
 				c.WriteResponse(smtpErr.Code, smtpErr.EnhancedCode, smtpErr.Message)
@@ -403,7 +405,7 @@ func (c *Conn) handleMail(arg string) {
 		}
 	}
 
-	if err := c.Session().Mail(from, opts); err != nil {
+	if err := c.Session().Mail(ctx, from, opts); err != nil {
 		if smtpErr, ok := err.(*SMTPError); ok {
 			c.WriteResponse(smtpErr.Code, smtpErr.EnhancedCode, smtpErr.Message)
 			return
@@ -468,7 +470,7 @@ func encodeXtext(raw string) string {
 }
 
 // MAIL state -> waiting for RCPTs followed by DATA
-func (c *Conn) handleRcpt(arg string) {
+func (c *Conn) handleRcpt(ctx context.Context, arg string) {
 	if !c.fromReceived {
 		c.WriteResponse(502, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
 		return
@@ -491,7 +493,7 @@ func (c *Conn) handleRcpt(arg string) {
 		return
 	}
 
-	if err := c.Session().Rcpt(recipient); err != nil {
+	if err := c.Session().Rcpt(ctx, recipient); err != nil {
 		if smtpErr, ok := err.(*SMTPError); ok {
 			c.WriteResponse(smtpErr.Code, smtpErr.EnhancedCode, smtpErr.Message)
 			return
@@ -503,7 +505,7 @@ func (c *Conn) handleRcpt(arg string) {
 	c.WriteResponse(250, EnhancedCode{2, 0, 0}, fmt.Sprintf("I'll make sure <%v> gets this", recipient))
 }
 
-func (c *Conn) handleAuth(arg string) {
+func (c *Conn) handleAuth(ctx context.Context, arg string) {
 	if c.helo == "" {
 		c.WriteResponse(502, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 		return
@@ -538,7 +540,7 @@ func (c *Conn) handleAuth(arg string) {
 		return
 	}
 
-	sasl := newSasl(c)
+	sasl := newSasl(ctx, c)
 
 	response := ir
 	for {
@@ -585,7 +587,7 @@ func (c *Conn) handleAuth(arg string) {
 	}
 }
 
-func (c *Conn) handleStartTLS() {
+func (c *Conn) handleStartTLS(ctx context.Context) {
 	if _, isTLS := c.TLSConnectionState(); isTLS {
 		c.WriteResponse(502, EnhancedCode{5, 5, 1}, "Already running in TLS")
 		return
@@ -614,14 +616,14 @@ func (c *Conn) handleStartTLS() {
 	// be able to see the information about TLS connection in the
 	// ConnectionState object passed to it.
 	if session := c.Session(); session != nil {
-		session.Logout()
+		session.Logout(ctx)
 		c.SetSession(nil)
 	}
-	c.reset()
+	c.reset(ctx)
 }
 
 // DATA
-func (c *Conn) handleData(arg string) {
+func (c *Conn) handleData(ctx context.Context, arg string) {
 	if arg != "" {
 		c.WriteResponse(501, EnhancedCode{5, 5, 4}, "DATA command should not have any arguments")
 		return
@@ -643,21 +645,21 @@ func (c *Conn) handleData(arg string) {
 	// We have recipients, go to accept data
 	c.WriteResponse(354, EnhancedCode{2, 0, 0}, "Go ahead. End your data with <CR><LF>.<CR><LF>")
 
-	defer c.reset()
+	defer c.reset(ctx)
 
 	if c.server.LMTP {
-		c.handleDataLMTP()
+		c.handleDataLMTP(ctx)
 		return
 	}
 
 	r := newDataReader(c)
-	code, enhancedCode, msg := toSMTPStatus(c.Session().Data(r))
+	code, enhancedCode, msg := toSMTPStatus(c.Session().Data(ctx, r))
 	r.limited = false
 	io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
 	c.WriteResponse(code, enhancedCode, msg)
 }
 
-func (c *Conn) handleBdat(arg string) {
+func (c *Conn) handleBdat(ctx context.Context, arg string) {
 	args := strings.Fields(arg)
 	if len(args) == 0 {
 		c.WriteResponse(501, EnhancedCode{5, 5, 4}, "Missing chunk size argument")
@@ -695,7 +697,7 @@ func (c *Conn) handleBdat(arg string) {
 		// Discard chunk itself without passing it to backend.
 		io.Copy(ioutil.Discard, io.LimitReader(c.text.R, int64(size)))
 
-		c.reset()
+		c.reset(ctx)
 		return
 	}
 
@@ -721,16 +723,16 @@ func (c *Conn) handleBdat(arg string) {
 
 			var err error
 			if !c.server.LMTP {
-				err = c.Session().Data(r)
+				err = c.Session().Data(ctx, r)
 			} else {
 				lmtpSession, ok := c.Session().(LMTPSession)
 				if !ok {
-					err = c.Session().Data(r)
+					err = c.Session().Data(ctx, r)
 					for _, rcpt := range c.recipients {
 						c.bdatStatus.SetStatus(rcpt, err)
 					}
 				} else {
-					err = lmtpSession.LMTPData(r, c.bdatStatus)
+					err = lmtpSession.LMTPData(ctx, r, c.bdatStatus)
 				}
 			}
 
@@ -752,7 +754,7 @@ func (c *Conn) handleBdat(arg string) {
 			c.Close()
 		}
 
-		c.reset()
+		c.reset(ctx)
 		return
 	}
 
@@ -778,7 +780,7 @@ func (c *Conn) handleBdat(arg string) {
 			return
 		}
 
-		c.reset()
+		c.reset(ctx)
 	} else {
 		c.WriteResponse(250, EnhancedCode{2, 0, 0}, "Continue")
 	}
@@ -867,7 +869,7 @@ func (s *statusCollector) SetStatus(rcptTo string, err error) {
 	}
 }
 
-func (c *Conn) handleDataLMTP() {
+func (c *Conn) handleDataLMTP(ctx context.Context) {
 	r := newDataReader(c)
 	status := c.createStatusCollector()
 
@@ -876,7 +878,7 @@ func (c *Conn) handleDataLMTP() {
 	lmtpSession, ok := c.Session().(LMTPSession)
 	if !ok {
 		// Fallback to using a single status for all recipients.
-		err := c.Session().Data(r)
+		err := c.Session().Data(ctx, r)
 		io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
 		for _, rcpt := range c.recipients {
 			status.SetStatus(rcpt, err)
@@ -898,7 +900,7 @@ func (c *Conn) handleDataLMTP() {
 				}
 			}()
 
-			status.fillRemaining(lmtpSession.LMTPData(r, status))
+			status.fillRemaining(lmtpSession.LMTPData(ctx, r, status))
 			io.Copy(ioutil.Discard, r) // Make sure all the data has been consumed
 			done <- true
 		}()
@@ -976,7 +978,7 @@ func (c *Conn) ReadLine() (string, error) {
 	return c.text.ReadLine()
 }
 
-func (c *Conn) reset() {
+func (c *Conn) reset(ctx context.Context) {
 	c.locker.Lock()
 	defer c.locker.Unlock()
 
@@ -988,7 +990,7 @@ func (c *Conn) reset() {
 	c.bytesReceived = 0
 
 	if c.session != nil {
-		c.session.Reset()
+		c.session.Reset(ctx)
 	}
 
 	c.fromReceived = false

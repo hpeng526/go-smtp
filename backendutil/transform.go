@@ -1,6 +1,7 @@
 package backendutil
 
 import (
+	"context"
 	"io"
 
 	"github.com/emersion/go-smtp"
@@ -16,8 +17,8 @@ type TransformBackend struct {
 }
 
 // Login implements the smtp.Backend interface.
-func (be *TransformBackend) Login(state *smtp.ConnectionState, username, password string) (smtp.Session, error) {
-	s, err := be.Backend.Login(state, username, password)
+func (be *TransformBackend) Login(ctx context.Context, state *smtp.ConnectionState, username, password string) (smtp.Session, error) {
+	s, err := be.Backend.Login(ctx, state, username, password)
 	if err != nil {
 		return nil, err
 	}
@@ -25,8 +26,8 @@ func (be *TransformBackend) Login(state *smtp.ConnectionState, username, passwor
 }
 
 // AnonymousLogin implements the smtp.Backend interface.
-func (be *TransformBackend) AnonymousLogin(state *smtp.ConnectionState) (smtp.Session, error) {
-	s, err := be.Backend.AnonymousLogin(state)
+func (be *TransformBackend) AnonymousLogin(ctx context.Context, state *smtp.ConnectionState) (smtp.Session, error) {
+	s, err := be.Backend.AnonymousLogin(ctx, state)
 	if err != nil {
 		return nil, err
 	}
@@ -39,11 +40,11 @@ type transformSession struct {
 	be *TransformBackend
 }
 
-func (s *transformSession) Reset() {
-	s.Session.Reset()
+func (s *transformSession) Reset(ctx context.Context) {
+	s.Session.Reset(ctx)
 }
 
-func (s *transformSession) Mail(from string, opts smtp.MailOptions) error {
+func (s *transformSession) Mail(ctx context.Context, from string, opts smtp.MailOptions) error {
 	if s.be.TransformMail != nil {
 		var err error
 		from, err = s.be.TransformMail(from)
@@ -51,10 +52,10 @@ func (s *transformSession) Mail(from string, opts smtp.MailOptions) error {
 			return err
 		}
 	}
-	return s.Session.Mail(from, opts)
+	return s.Session.Mail(ctx, from, opts)
 }
 
-func (s *transformSession) Rcpt(to string) error {
+func (s *transformSession) Rcpt(ctx context.Context, to string) error {
 	if s.be.TransformRcpt != nil {
 		var err error
 		to, err = s.be.TransformRcpt(to)
@@ -62,10 +63,10 @@ func (s *transformSession) Rcpt(to string) error {
 			return err
 		}
 	}
-	return s.Session.Rcpt(to)
+	return s.Session.Rcpt(ctx, to)
 }
 
-func (s *transformSession) Data(r io.Reader) error {
+func (s *transformSession) Data(ctx context.Context, r io.Reader) error {
 	if s.be.TransformData != nil {
 		var err error
 		r, err = s.be.TransformData(r)
@@ -73,9 +74,9 @@ func (s *transformSession) Data(r io.Reader) error {
 			return err
 		}
 	}
-	return s.Session.Data(r)
+	return s.Session.Data(ctx, r)
 }
 
-func (s *transformSession) Logout() error {
-	return s.Session.Logout()
+func (s *transformSession) Logout(ctx context.Context) error {
+	return s.Session.Logout(ctx)
 }

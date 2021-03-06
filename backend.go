@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"errors"
 	"io"
 )
@@ -14,11 +15,11 @@ var (
 type Backend interface {
 	// Authenticate a user. Return smtp.ErrAuthUnsupported if you don't want to
 	// support this.
-	Login(state *ConnectionState, username, password string) (Session, error)
+	Login(ctx context.Context, state *ConnectionState, username, password string) (Session, error)
 
 	// Called if the client attempts to send mail without logging in first.
 	// Return smtp.ErrAuthRequired if you don't want to support this.
-	AnonymousLogin(state *ConnectionState) (Session, error)
+	AnonymousLogin(ctx context.Context, state *ConnectionState) (Session, error)
 }
 
 type BodyType string
@@ -63,17 +64,17 @@ type MailOptions struct {
 // The methods are called when the remote client issues the matching command.
 type Session interface {
 	// Discard currently processed message.
-	Reset()
+	Reset(ctx context.Context)
 
 	// Free all resources associated with session.
-	Logout() error
+	Logout(ctx context.Context) error
 
 	// Set return path for currently processed message.
-	Mail(from string, opts MailOptions) error
+	Mail(ctx context.Context, from string, opts MailOptions) error
 	// Add recipient for currently processed message.
-	Rcpt(to string) error
+	Rcpt(ctx context.Context, to string) error
 	// Set currently processed message contents and send it.
-	Data(r io.Reader) error
+	Data(ctx context.Context, r io.Reader) error
 }
 
 // LMTPSession is an add-on interface for Session. It can be implemented by
@@ -92,7 +93,7 @@ type LMTPSession interface {
 	//
 	// Return value of LMTPData itself is used as a status for
 	// recipients that got no status set before using StatusCollector.
-	LMTPData(r io.Reader, status StatusCollector) error
+	LMTPData(ctx context.Context, r io.Reader, status StatusCollector) error
 }
 
 // StatusCollector allows a backend to provide per-recipient status

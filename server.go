@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -16,7 +17,7 @@ import (
 var errTCPAndLMTP = errors.New("smtp: cannot start LMTP server listening on a TCP socket")
 
 // A function that creates SASL servers.
-type SaslServerFactory func(conn *Conn) sasl.Server
+type SaslServerFactory func(ctx context.Context, conn *Conn) sasl.Server
 
 // Logger interface is used by Server to report unexpected internal errors.
 type Logger interface {
@@ -84,14 +85,14 @@ func NewServer(be Backend) *Server {
 		ErrorLog: log.New(os.Stderr, "smtp/server ", log.LstdFlags),
 		caps:     []string{"PIPELINING", "8BITMIME", "ENHANCEDSTATUSCODES", "CHUNKING"},
 		auths: map[string]SaslServerFactory{
-			sasl.Plain: func(conn *Conn) sasl.Server {
+			sasl.Plain: func(ctx context.Context, conn *Conn) sasl.Server {
 				return sasl.NewPlainServer(func(identity, username, password string) error {
 					if identity != "" && identity != username {
 						return errors.New("Identities not supported")
 					}
 
 					state := conn.State()
-					session, err := be.Login(&state, username, password)
+					session, err := be.Login(ctx, &state, username, password)
 					if err != nil {
 						return err
 					}
@@ -131,7 +132,7 @@ func (s *Server) handleConn(c *Conn) error {
 	s.locker.Lock()
 	s.conns[c] = struct{}{}
 	s.locker.Unlock()
-
+	ctx := context.Background()
 	defer func() {
 		c.Close()
 
@@ -151,7 +152,7 @@ func (s *Server) handleConn(c *Conn) error {
 				continue
 			}
 
-			c.handle(cmd, arg)
+			c.handle(ctx, cmd, arg)
 		} else {
 			if err == io.EOF {
 				return nil

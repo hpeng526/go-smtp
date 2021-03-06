@@ -2,6 +2,7 @@ package smtp_test
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -44,7 +45,7 @@ type backend struct {
 	userErr     error
 }
 
-func (be *backend) Login(_ *smtp.ConnectionState, username, password string) (smtp.Session, error) {
+func (be *backend) Login(ctx context.Context, _ *smtp.ConnectionState, username, password string) (smtp.Session, error) {
 	if be.userErr != nil {
 		return &session{}, be.userErr
 	}
@@ -60,7 +61,7 @@ func (be *backend) Login(_ *smtp.ConnectionState, username, password string) (sm
 	return &session{backend: be}, nil
 }
 
-func (be *backend) AnonymousLogin(_ *smtp.ConnectionState) (smtp.Session, error) {
+func (be *backend) AnonymousLogin(ctx context.Context, _ *smtp.ConnectionState) (smtp.Session, error) {
 	if be.userErr != nil {
 		return &session{}, be.userErr
 	}
@@ -83,30 +84,30 @@ type session struct {
 	msg *message
 }
 
-func (s *session) Reset() {
+func (s *session) Reset(ctx context.Context) {
 	s.msg = &message{}
 }
 
-func (s *session) Logout() error {
+func (s *session) Logout(ctx context.Context) error {
 	return nil
 }
 
-func (s *session) Mail(from string, opts smtp.MailOptions) error {
+func (s *session) Mail(ctx context.Context, from string, opts smtp.MailOptions) error {
 	if s.backend.panicOnMail {
 		panic("Everything is on fire!")
 	}
-	s.Reset()
+	s.Reset(ctx)
 	s.msg.From = from
 	s.msg.Opts = opts
 	return nil
 }
 
-func (s *session) Rcpt(to string) error {
+func (s *session) Rcpt(ctx context.Context, to string) error {
 	s.msg.To = append(s.msg.To, to)
 	return nil
 }
 
-func (s *session) Data(r io.Reader) error {
+func (s *session) Data(ctx context.Context, r io.Reader) error {
 	if s.backend.dataErr != nil {
 
 		if s.backend.dataErrOffset != 0 {
@@ -139,8 +140,8 @@ func (s *session) Data(r io.Reader) error {
 	return nil
 }
 
-func (s *session) LMTPData(r io.Reader, collector smtp.StatusCollector) error {
-	if err := s.Data(r); err != nil {
+func (s *session) LMTPData(ctx context.Context, r io.Reader, collector smtp.StatusCollector) error {
+	if err := s.Data(ctx, r); err != nil {
 		return err
 	}
 

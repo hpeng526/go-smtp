@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io"
 	"log"
@@ -17,31 +18,31 @@ func init() {
 
 type backend struct{}
 
-func (bkd *backend) Login(state *smtp.ConnectionState, username, password string) (smtp.Session, error) {
+func (bkd *backend) Login(ctx context.Context, state *smtp.ConnectionState, username, password string) (smtp.Session, error) {
 	return &session{}, nil
 }
 
-func (bkd *backend) AnonymousLogin(state *smtp.ConnectionState) (smtp.Session, error) {
+func (bkd *backend) AnonymousLogin(ctx context.Context, state *smtp.ConnectionState) (smtp.Session, error) {
 	return &session{}, nil
 }
 
 type session struct{}
 
-func (s *session) Mail(from string, opts smtp.MailOptions) error {
+func (s *session) Mail(ctx context.Context, from string, opts smtp.MailOptions) error {
 	return nil
 }
 
-func (s *session) Rcpt(to string) error {
+func (s *session) Rcpt(ctx context.Context, to string) error {
 	return nil
 }
 
-func (s *session) Data(r io.Reader) error {
+func (s *session) Data(ctx context.Context, r io.Reader) error {
 	return nil
 }
 
-func (s *session) Reset() {}
+func (s *session) Reset(ctx context.Context) {}
 
-func (s *session) Logout() error {
+func (s *session) Logout(ctx context.Context) error {
 	return nil
 }
 
